@@ -1,2 +1,2 @@
 mim: mim.c
-	$(CC) mim.c -o mim -Wall -Wextra -pedantic -std=c99
+	$(CC) mim.c -o bin/mim -Wall -Wextra -pedantic -std=c99
