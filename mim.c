@@ -8,11 +8,13 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <string.h>
 
 /*** DEFINES ***/
+#define MIM_VERSION "0.0.1"
+
 // Emulate CTRL + inputs (sets first three bits to 0 to emulate ASCII behaviour)
 #define CTRL_KEY(k) ((k) & 0x1f)
-void clear_screen();
 
 /*** DATA ***/
 
@@ -37,7 +39,8 @@ struct editor_config E;
 void die(const char *s)
 {
     // Clean screen on exit
-    clear_screen();
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
     perror(s);
     exit(1);
 }
@@ -152,21 +155,77 @@ int get_window_size(int *rows, int *cols)
     }
 }
 
+// Define a single string buffer to update at once
+// Append buffer
+struct abuf
+{
+    char *b;
+    int len;
+};
+
+// Constructor
+#define ABUT_INIT {NULL, 0}
+
+// Append len bytes of s to ab buffer
+void ab_append(struct abuf *ab, const char *s, int len)
+{
+    // Realloc bigger mem as required
+    char *new = realloc(ab->b, ab->len + len);
+
+    if (new == NULL)
+        return;
+    // Append and update buf
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+// Free ab buffer
+void ab_free(struct abuf *ab)
+{
+    free(ab->b);
+}
+
 /*** OUTPUT ***/
 
 /**
  * editor_draw_rows - Handle drawing each row of buffer of text
  */
-void editor_draw_rows()
+void editor_draw_rows(struct abuf *ab)
 {
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        // Write a tilde
-        write(STDOUT_FILENO, "~", 1);
+        if (y == E.screenrows / 3)
+        {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome), "MIM Text Editor -- version %s", MIM_VERSION);
+            if (welcomelen > E.screencols)
+                welcomelen = E.screencols;
+            // Center
+            int padding = (E.screencols - welcomelen) / 2;
+            if (padding)
+            {
+                ab_append(ab, "~", 1);
+                padding--;
+            }
+            while (padding--)
+                ab_append(ab, " ", 1);
+
+            ab_append(ab, welcome, welcomelen);
+        }
+        else
+        {
+
+            // Write a tilde
+            ab_append(ab, "~", 1);
+        }
+        // Clean row as we write
+        ab_append(ab, "\x1b[K", 3);
         // If not last line, print newline
-        if (y < E.screenrows -1) {
-            write(STDOUT_FILENO, "\r\n", 2);
+        if (y < E.screenrows - 1)
+        {
+            ab_append(ab, "\r\n", 2);
         }
     }
 }
@@ -176,20 +235,22 @@ void editor_draw_rows()
  */
 void editor_refresh_screen()
 {
-    clear_screen();
-    editor_draw_rows();
-    // Draw rows and then go back to top left
-    write(STDOUT_FILENO, "\x1b[H", 3);
-}
+    struct abuf ab = ABUT_INIT;
 
-void clear_screen()
-{
-    // To stdout, write 4 characters:
-    // \x1b escape sequence
-    // [2 argument for J (2 means entire screen)
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    // Hide cursor
+    ab_append(&ab, "\x1b[?25l", 6);
     // Position cursor to top left with H
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    ab_append(&ab, "\x1b[H", 3);
+
+    editor_draw_rows(&ab);
+
+    // Draw rows and then go back to top left
+    ab_append(&ab, "\x1b[H", 3);
+    // Show cursor
+    ab_append(&ab, "\x1b[?25h", 6);
+
+    write(STDOUT_FILENO, ab.b, ab.len);
+    ab_free(&ab);
 }
 
 /*** INPUT  ***/
@@ -202,7 +263,9 @@ void editor_process_keypress()
     switch (c)
     {
     case CTRL_KEY('q'):
-        clear_screen();
+        // Clear screen
+        write(STDOUT_FILENO, "\x1b[2J", 4);
+        write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
         break;
 
