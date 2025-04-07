@@ -7,14 +7,26 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <sys/ioctl.h>
 
 /*** DEFINES ***/
 // Emulate CTRL + inputs (sets first three bits to 0 to emulate ASCII behaviour)
-#define CTRL(k) ((k) & 0x1f)
+#define CTRL_KEY(k) ((k) & 0x1f)
+void clear_screen();
 
 /*** DATA ***/
 
 struct termios original_termios;
+
+struct editor_config
+{
+    int screenrows;
+    int screencols;
+    struct termios original_termios;
+};
+
+struct editor_config E;
+
 /*** TERMINAL ***/
 
 /**
@@ -24,17 +36,19 @@ struct termios original_termios;
  */
 void die(const char *s)
 {
+    // Clean screen on exit
+    clear_screen();
     perror(s);
     exit(1);
 }
 
 /**
- * 
+ *
  * disable_raw_mode - Restore original terminal settings
  */
 void disable_raw_mode()
 {
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_termios) == -1)
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.original_termios) == -1)
         die("tcsetattar");
 }
 
@@ -43,11 +57,11 @@ void disable_raw_mode()
  */
 void enable_raw_mode()
 {
-    if (tcgetattr(STDERR_FILENO, &original_termios) == -1)
+    if (tcgetattr(STDERR_FILENO, &E.original_termios) == -1)
         die("tcgetattr");
     atexit(disable_raw_mode);
 
-    struct termios raw = original_termios;
+    struct termios raw = E.original_termios;
     /*
     Disable features by flipping flags
         ICRNL = CTRL + M (carriage return)
@@ -83,40 +97,138 @@ char editor_read_key()
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1)
     {
+        // Cygwin returns -1 and errno = EAGAIN when read() times out
+        // So we ignore that.
         if (nread == -1 && errno != EAGAIN)
             die("read");
     }
     return c;
 }
 
+int get_cursor_position(int *rows, int *cols)
+{
+    char buf[32];
+    unsigned int i = 0;
 
+    // Request cursor position (6) from Device Status Report (n)
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
+        return -1;
+
+    while (i < sizeof(buf) - 1)
+    {
+        if (read(STDIN_FILENO, &buf[i], 1) != 1)
+            break;
+        if (buf[i] == 'R')
+            break;
+        i++;
+    }
+    buf[i] = '\0';
+    if (buf[0] != '\x1b' || buf[1] != '[')
+        return -1;
+    if (sscanf(&buf[2], "%d;%d", rows, cols) != 2)
+        return -1;
+    return 0;
+}
+
+int get_window_size(int *rows, int *cols)
+{
+    struct winsize ws;
+    // Get size from ioctl into ws
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
+    {
+        // Fallback option:
+        // position cursor to extreme right (999C) and bottom (999B)
+        if (write(STDOUT_FILENO, "\x1b[999C\x1b[998B", 12) != 12)
+            return -1;
+        // Failure
+        return get_cursor_position(rows, cols);
+    }
+    else
+    {
+        // Update parmas
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+        return 0;
+    }
+}
+
+/*** OUTPUT ***/
+
+/**
+ * editor_draw_rows - Handle drawing each row of buffer of text
+ */
+void editor_draw_rows()
+{
+    int y;
+    for (y = 0; y < E.screenrows; y++)
+    {
+        // Write a tilde
+        write(STDOUT_FILENO, "~", 1);
+        // If not last line, print newline
+        if (y < E.screenrows -1) {
+            write(STDOUT_FILENO, "\r\n", 2);
+        }
+    }
+}
+
+/**
+ * editor_refresh_screen - Update the screen contents
+ */
+void editor_refresh_screen()
+{
+    clear_screen();
+    editor_draw_rows();
+    // Draw rows and then go back to top left
+    write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+void clear_screen()
+{
+    // To stdout, write 4 characters:
+    // \x1b escape sequence
+    // [2 argument for J (2 means entire screen)
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    // Position cursor to top left with H
+    write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+/*** INPUT  ***/
+/**
+ * editor_process_keypress - Wait for keypress from `editor_read_key` and handle special characters.
+ */
+void editor_process_keypress()
+{
+    char c = editor_read_key();
+    switch (c)
+    {
+    case CTRL_KEY('q'):
+        clear_screen();
+        exit(0);
+        break;
+
+    default:
+        break;
+    }
+}
 
 /*** INIT ***/
 
+void init_editor()
+{
+    if (get_window_size(&E.screenrows, &E.screencols) == -1)
+        die("get_window_size");
+}
 /**
  * main - Main function to innit the program
  */
 int main()
 {
     enable_raw_mode();
+    init_editor();
     while (true)
     {
-
-        char c = '\0';
-        // Cygwin returns -1 and errno = EAGAIN when it read() times out
-        // So we ignore that.
-        if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN)
-            die("read");
-        if (iscntrl(c))
-        {
-            printf("%d\r\n", c);
-        }
-        else
-        {
-            printf("%d ('%c')\r\n", c, c);
-        }
-        if (c == CTRL('q'))
-            break;
+        editor_refresh_screen();
+        editor_process_keypress();
     }
     return 0;
 }
