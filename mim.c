@@ -16,12 +16,29 @@
 // Emulate CTRL + inputs (sets first three bits to 0 to emulate ASCII behaviour)
 #define CTRL_KEY(k) ((k) & 0x1f)
 
+// Key mappings
+enum editorKey
+{
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN,
+    DEL_KEY,
+    HOME_KEY,
+    END_KEY,
+    PAGE_UP,
+    PAGE_DOWN,
+};
+
 /*** DATA ***/
 
 struct termios original_termios;
 
 struct editor_config
 {
+    // Cursor positions
+    int cx, cy;
+    // Screen size
     int screenrows;
     int screencols;
     struct termios original_termios;
@@ -94,7 +111,7 @@ void enable_raw_mode()
 /**
  * editor_read_key - Read a single key from standard input
  */
-char editor_read_key()
+int editor_read_key()
 {
     int nread;
     char c;
@@ -105,7 +122,87 @@ char editor_read_key()
         if (nread == -1 && errno != EAGAIN)
             die("read");
     }
-    return c;
+
+    // Input is esc key
+    // Immediately consume next bytes to check for special keys
+    if (c == '\x1b')
+    {
+        char seq[3];
+        if (read(STDIN_FILENO, &seq[0], 1) != 1)
+            return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1)
+            return '\x1b';
+
+        if (seq[0] == '[')
+        {
+            if (seq[1] >= '0' && seq[1] <= '9')
+            {
+                if (read(STDIN_FILENO, &seq[2], 1) != 1)
+                    return '\x1b';
+                if (seq[2] == '~')
+                {
+                    switch (seq[1])
+                    {
+                    case '1':
+                        return HOME_KEY; // [1~
+                    case '2':
+                        return END_KEY; // [2~
+                    case '3':
+                        return DEL_KEY; // [3~
+                    case '5':
+                        return PAGE_UP; // [5~
+                    case '6':
+                        return PAGE_DOWN; // [6~
+                    case '7':
+                        return HOME_KEY; // [7~
+                    case '8':
+                        return END_KEY; // [8~
+                    default:
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                switch (seq[1])
+                {
+                case 'A':
+                    return ARROW_UP; // [A
+                case 'B':
+                    return ARROW_DOWN; // [B
+                case 'C':
+                    return ARROW_RIGHT; // [C
+                case 'D':
+                    return ARROW_LEFT; // [D
+                case 'H':
+                    return HOME_KEY; // [H
+                case 'F':
+                    return END_KEY; // [F
+                default:
+                    break;
+                }
+            }
+        } 
+        else if (seq[0] == 'O') 
+        {
+            switch (seq[1])
+            {
+            case 'H':
+                return HOME_KEY; // OH
+            case 'F':
+                return END_KEY; // OF
+            default:
+                break;
+            }
+        }
+
+        // Return as is for unhandled cases
+        return '\x1b';
+    }
+    else
+    {
+        return c;
+    }
 }
 
 int get_cursor_position(int *rows, int *cols)
@@ -239,13 +336,16 @@ void editor_refresh_screen()
 
     // Hide cursor
     ab_append(&ab, "\x1b[?25l", 6);
-    // Position cursor to top left with H
+    // Position cursor to top left with H, no args
     ab_append(&ab, "\x1b[H", 3);
 
     editor_draw_rows(&ab);
 
-    // Draw rows and then go back to top left
-    ab_append(&ab, "\x1b[H", 3);
+    char buf[32];
+    // Draw the cursor at cy, cx
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    ab_append(&ab, buf, strlen(buf));
+
     // Show cursor
     ab_append(&ab, "\x1b[?25h", 6);
 
@@ -254,12 +354,41 @@ void editor_refresh_screen()
 }
 
 /*** INPUT  ***/
+
+/**
+ * editor_move_cursor - Move the cursor using ARROW_{DIRECTION} keys
+ */
+void editor_move_cursor(int key)
+{
+    switch (key)
+    {
+    case ARROW_LEFT:
+        if (E.cx != 0)
+            E.cx--;
+        break;
+    case ARROW_DOWN:
+        if (E.cy != E.screencols - 1)
+            E.cy++;
+        break;
+    case ARROW_UP:
+        if (E.cy != 0)
+            E.cy--;
+        break;
+    case ARROW_RIGHT:
+        if (E.cx != E.screenrows - 1)
+            E.cx++;
+        break;
+    default:
+        break;
+    }
+}
+
 /**
  * editor_process_keypress - Wait for keypress from `editor_read_key` and handle special characters.
  */
 void editor_process_keypress()
 {
-    char c = editor_read_key();
+    int c = editor_read_key();
     switch (c)
     {
     case CTRL_KEY('q'):
@@ -268,7 +397,28 @@ void editor_process_keypress()
         write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
         break;
+    
+    case HOME_KEY:
+        E.cx = 0;
+        break;
+    case END_KEY:
+        E.cx = E.screencols - 1;
+        break;
 
+    case PAGE_UP:
+    case PAGE_DOWN:
+    {
+        int times = E.screenrows;
+        while (times--)
+            editor_move_cursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+    }
+    break;
+    case ARROW_DOWN:
+    case ARROW_UP:
+    case ARROW_LEFT:
+    case ARROW_RIGHT:
+        editor_move_cursor(c);
+        break;
     default:
         break;
     }
@@ -278,6 +428,8 @@ void editor_process_keypress()
 
 void init_editor()
 {
+    E.cx = 0;
+    E.cy = 0;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("get_window_size");
 }
