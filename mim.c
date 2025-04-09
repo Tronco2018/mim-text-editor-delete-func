@@ -1,5 +1,10 @@
 /*** INCLUDES ***/
 
+// Feature test macros
+#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
+#define _GNU_SOURCE
+#include <stdio.h>
 #include <ctype.h>
 #include <termios.h>
 #include <unistd.h>
@@ -263,16 +268,37 @@ int get_window_size(int *rows, int *cols)
 }
 
 /*** FILE IO ***/
-void editor_open()
+void editor_open(char *filename)
 {
-    char *line = "Hi Mom!";
-    ssize_t linelen = strlen(line);
+    FILE *fp = fopen(filename, "r");
+    if (!fp)
+        die("open");
 
-    E.row.size = linelen;
-    E.row.chars = malloc(linelen + 1);
-    memcpy(E.row.chars, line, linelen);
-    E.row.chars[linelen] = '\0';
-    E.numrows = 1;
+    char *line = NULL;
+    // Hold size of allocated buff
+    size_t linecap = 0;
+    // Hold length of line read
+    ssize_t linelen;
+    // getline reads one line + ending newline
+    // from file pointed by fp into memory pointed by line
+    // and sets linecap to the size it read
+    linelen = getline(&line, &linecap, fp);
+    if (linelen != -1)
+    {
+        // Trim all newlines and carriage returns
+        while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+            linelen--;
+
+        E.row.size = linelen;
+        // Allocate size first
+        E.row.chars = malloc(linelen + 1);
+        // Then copy line into chars
+        memcpy(E.row.chars, line, linelen);
+        E.row.chars[linelen] = '\0';
+        E.numrows = 1;
+    }
+    free(line);
+    fclose(fp);
 }
 
 // Define a single string buffer to update at once
@@ -318,7 +344,8 @@ void editor_draw_rows(struct abuf *ab)
     {
         if (y >= E.numrows)
         {
-            if (y == E.screenrows / 3)
+            // Display welcome if nothing is in rows buff
+            if (E.numrows == 0 && y == E.screenrows / 3)
             {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "MIM Text Editor -- version %s", MIM_VERSION);
@@ -469,11 +496,14 @@ void init_editor()
 /**
  * main - Main function to innit the program
  */
-int main()
+int main(int argc, char *argv[])
 {
     enable_raw_mode();
     init_editor();
-    editor_open();
+    if (argc >= 2)
+    {
+        editor_open(argv[1]);
+    }
 
     while (true)
     {
