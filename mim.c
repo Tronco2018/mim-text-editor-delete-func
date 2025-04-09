@@ -34,6 +34,12 @@ enum editorKey
 
 struct termios original_termios;
 
+typedef struct erow
+{
+    int size;
+    char *chars;
+} erows;
+
 struct editor_config
 {
     // Cursor positions
@@ -41,6 +47,10 @@ struct editor_config
     // Screen size
     int screenrows;
     int screencols;
+    // Number of rows used
+    int numrows;
+    // Data in each row + size
+    erows row;
     struct termios original_termios;
 };
 
@@ -182,8 +192,8 @@ int editor_read_key()
                     break;
                 }
             }
-        } 
-        else if (seq[0] == 'O') 
+        }
+        else if (seq[0] == 'O')
         {
             switch (seq[1])
             {
@@ -252,6 +262,19 @@ int get_window_size(int *rows, int *cols)
     }
 }
 
+/*** FILE IO ***/
+void editor_open()
+{
+    char *line = "Hi Mom!";
+    ssize_t linelen = strlen(line);
+
+    E.row.size = linelen;
+    E.row.chars = malloc(linelen + 1);
+    memcpy(E.row.chars, line, linelen);
+    E.row.chars[linelen] = '\0';
+    E.numrows = 1;
+}
+
 // Define a single string buffer to update at once
 // Append buffer
 struct abuf
@@ -293,29 +316,38 @@ void editor_draw_rows(struct abuf *ab)
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        if (y == E.screenrows / 3)
+        if (y >= E.numrows)
         {
-            char welcome[80];
-            int welcomelen = snprintf(welcome, sizeof(welcome), "MIM Text Editor -- version %s", MIM_VERSION);
-            if (welcomelen > E.screencols)
-                welcomelen = E.screencols;
-            // Center
-            int padding = (E.screencols - welcomelen) / 2;
-            if (padding)
+            if (y == E.screenrows / 3)
             {
-                ab_append(ab, "~", 1);
-                padding--;
-            }
-            while (padding--)
-                ab_append(ab, " ", 1);
+                char welcome[80];
+                int welcomelen = snprintf(welcome, sizeof(welcome), "MIM Text Editor -- version %s", MIM_VERSION);
+                if (welcomelen > E.screencols)
+                    welcomelen = E.screencols;
+                // Center
+                int padding = (E.screencols - welcomelen) / 2;
+                if (padding)
+                {
+                    ab_append(ab, "~", 1);
+                    padding--;
+                }
+                while (padding--)
+                    ab_append(ab, " ", 1);
 
-            ab_append(ab, welcome, welcomelen);
+                ab_append(ab, welcome, welcomelen);
+            }
+            else
+            {
+                // Write a tilde
+                ab_append(ab, "~", 1);
+            }
         }
         else
         {
-
-            // Write a tilde
-            ab_append(ab, "~", 1);
+            int len = E.row.size;
+            if (len > E.screencols)
+                len = E.screencols;
+            ab_append(ab, E.row.chars, len);
         }
         // Clean row as we write
         ab_append(ab, "\x1b[K", 3);
@@ -397,7 +429,7 @@ void editor_process_keypress()
         write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
         break;
-    
+
     case HOME_KEY:
         E.cx = 0;
         break;
@@ -430,6 +462,7 @@ void init_editor()
 {
     E.cx = 0;
     E.cy = 0;
+    E.numrows = 0;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("get_window_size");
 }
@@ -440,6 +473,8 @@ int main()
 {
     enable_raw_mode();
     init_editor();
+    editor_open();
+
     while (true)
     {
         editor_refresh_screen();
