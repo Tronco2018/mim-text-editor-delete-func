@@ -43,19 +43,21 @@ typedef struct erow
 {
     int size;
     char *chars;
-} erows;
+} erow;
 
 struct editor_config
 {
     // Cursor positions
     int cx, cy;
+    // Row offset
+    int rowoff;
     // Screen size
     int screenrows;
     int screencols;
     // Number of rows used
     int numrows;
     // Data in each row + size
-    erows row;
+    erow *row;
     struct termios original_termios;
 };
 
@@ -267,6 +269,18 @@ int get_window_size(int *rows, int *cols)
     }
 }
 
+/*** ROW OPERATIONS ***/
+void editor_append_row(char *s, size_t len)
+{
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
 /*** FILE IO ***/
 void editor_open(char *filename)
 {
@@ -282,20 +296,12 @@ void editor_open(char *filename)
     // getline reads one line + ending newline
     // from file pointed by fp into memory pointed by line
     // and sets linecap to the size it read
-    linelen = getline(&line, &linecap, fp);
-    if (linelen != -1)
+    while ((linelen = getline(&line, &linecap, fp)) != -1)
     {
         // Trim all newlines and carriage returns
         while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
             linelen--;
-
-        E.row.size = linelen;
-        // Allocate size first
-        E.row.chars = malloc(linelen + 1);
-        // Then copy line into chars
-        memcpy(E.row.chars, line, linelen);
-        E.row.chars[linelen] = '\0';
-        E.numrows = 1;
+        editor_append_row(line, linelen);
     }
     free(line);
     fclose(fp);
@@ -335,6 +341,23 @@ void ab_free(struct abuf *ab)
 /*** OUTPUT ***/
 
 /**
+ * editor_scroll - Update row offset based on cursor position
+ */
+void editor_scroll()
+{
+    // Cursor is above visible window, scroll up
+    if (E.cy < E.rowoff)
+    {
+        E.rowoff = E.cy;
+    }
+    // Cursor is past visible window, scroll down
+    if (E.cy >= E.rowoff + E.screenrows)
+    {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+}
+
+/**
  * editor_draw_rows - Handle drawing each row of buffer of text
  */
 void editor_draw_rows(struct abuf *ab)
@@ -342,7 +365,8 @@ void editor_draw_rows(struct abuf *ab)
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        if (y >= E.numrows)
+        int filerow = y + E.rowoff;
+        if (filerow >= E.numrows)
         {
             // Display welcome if nothing is in rows buff
             if (E.numrows == 0 && y == E.screenrows / 3)
@@ -371,10 +395,10 @@ void editor_draw_rows(struct abuf *ab)
         }
         else
         {
-            int len = E.row.size;
+            int len = E.row[filerow].size;
             if (len > E.screencols)
                 len = E.screencols;
-            ab_append(ab, E.row.chars, len);
+            ab_append(ab, E.row[filerow].chars, len);
         }
         // Clean row as we write
         ab_append(ab, "\x1b[K", 3);
@@ -391,6 +415,8 @@ void editor_draw_rows(struct abuf *ab)
  */
 void editor_refresh_screen()
 {
+    editor_scroll();
+
     struct abuf ab = ABUT_INIT;
 
     // Hide cursor
@@ -402,7 +428,7 @@ void editor_refresh_screen()
 
     char buf[32];
     // Draw the cursor at cy, cx
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
     ab_append(&ab, buf, strlen(buf));
 
     // Show cursor
@@ -426,7 +452,7 @@ void editor_move_cursor(int key)
             E.cx--;
         break;
     case ARROW_DOWN:
-        if (E.cy != E.screencols - 1)
+        if (E.cy < E.numrows)
             E.cy++;
         break;
     case ARROW_UP:
@@ -489,7 +515,9 @@ void init_editor()
 {
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
     E.numrows = 0;
+    E.row = NULL;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("get_window_size");
 }
