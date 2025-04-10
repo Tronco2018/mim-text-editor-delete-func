@@ -68,7 +68,7 @@ struct editor_config E;
 /*** TERMINAL ***/
 
 /**
- * die - Handle fatal errors.
+ * Handle fatal errors.
  *
  * Print an error message provided by `perror()` and exit the program.
  */
@@ -82,8 +82,7 @@ void die(const char *s)
 }
 
 /**
- *
- * disable_raw_mode - Restore original terminal settings
+ * Restore original terminal settings
  */
 void disable_raw_mode()
 {
@@ -92,7 +91,7 @@ void disable_raw_mode()
 }
 
 /**
- * enable_raw_mode - Enter raw terminal mode
+ * Enter raw terminal mode
  */
 void enable_raw_mode()
 {
@@ -127,8 +126,9 @@ void enable_raw_mode()
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1)
         die("tcsetattr");
 }
+
 /**
- * editor_read_key - Read a single key from standard input
+ * Read a single key from standard input
  */
 int editor_read_key()
 {
@@ -224,6 +224,12 @@ int editor_read_key()
     }
 }
 
+/**
+ * Get current cursor position
+ *
+ * Request cursor position from terminal and parse the response
+ * to determine current row and column.
+ */
 int get_cursor_position(int *rows, int *cols)
 {
     char buf[32];
@@ -249,6 +255,12 @@ int get_cursor_position(int *rows, int *cols)
     return 0;
 }
 
+/**
+ * Determine terminal window dimensions
+ *
+ * Try to get window size using ioctl, or fallback to positioning
+ * cursor at bottom right and reading the position.
+ */
 int get_window_size(int *rows, int *cols)
 {
     struct winsize ws;
@@ -272,6 +284,12 @@ int get_window_size(int *rows, int *cols)
 }
 
 /*** ROW OPERATIONS ***/
+
+/**
+ * Add a new row of text to the editor buffer
+ *
+ * Allocate memory for a new row and copy the provided string.
+ */
 void editor_append_row(char *s, size_t len)
 {
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
@@ -284,6 +302,12 @@ void editor_append_row(char *s, size_t len)
 }
 
 /*** FILE IO ***/
+
+/**
+ * Open and read a file into the editor buffer
+ *
+ * Read file line by line and add each to the editor row buffer.
+ */
 void editor_open(char *filename)
 {
     FILE *fp = fopen(filename, "r");
@@ -320,7 +344,11 @@ struct abuf
 // Constructor
 #define ABUT_INIT {NULL, 0}
 
-// Append len bytes of s to ab buffer
+/**
+ * Append string to append buffer
+ *
+ * Reallocate memory as needed and append the string to the buffer.
+ */
 void ab_append(struct abuf *ab, const char *s, int len)
 {
     // Realloc bigger mem as required
@@ -334,7 +362,9 @@ void ab_append(struct abuf *ab, const char *s, int len)
     ab->len += len;
 }
 
-// Free ab buffer
+/**
+ * Free memory used by append buffer
+ */
 void ab_free(struct abuf *ab)
 {
     free(ab->b);
@@ -343,7 +373,7 @@ void ab_free(struct abuf *ab)
 /*** OUTPUT ***/
 
 /**
- * editor_scroll - Update row offset based on cursor position
+ * Update row offset based on cursor position
  */
 void editor_scroll()
 {
@@ -372,7 +402,7 @@ void editor_scroll()
 }
 
 /**
- * editor_draw_rows - Handle drawing each row of buffer of text
+ * Handle drawing each row of buffer of text
  */
 void editor_draw_rows(struct abuf *ab)
 {
@@ -427,7 +457,7 @@ void editor_draw_rows(struct abuf *ab)
 }
 
 /**
- * editor_refresh_screen - Update the screen contents
+ * Update the screen contents
  */
 void editor_refresh_screen()
 {
@@ -457,7 +487,7 @@ void editor_refresh_screen()
 /*** INPUT  ***/
 
 /**
- * editor_move_cursor - Move the cursor using ARROW_{DIRECTION} keys
+ * Move the cursor using ARROW_{DIRECTION} keys
  */
 void editor_move_cursor(int key)
 {
@@ -510,7 +540,7 @@ void editor_move_cursor(int key)
 }
 
 /**
- * editor_process_keypress - Wait for keypress from `editor_read_key` and handle special characters.
+ * Wait for keypress from `editor_read_key` and handle special characters
  */
 void editor_process_keypress()
 {
@@ -550,8 +580,11 @@ void editor_process_keypress()
     }
 }
 
-/*** INIT ***/
-
+/**
+ * Initialize editor state
+ *
+ * Set default values for editor state and get terminal window size.
+ */
 void init_editor()
 {
     E.cx = 0;
@@ -563,8 +596,9 @@ void init_editor()
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("get_window_size");
 }
+
 /**
- * main - Main function to innit the program
+ * Main function to initialize the program
  */
 int main(int argc, char *argv[])
 {
