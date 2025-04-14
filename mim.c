@@ -17,6 +17,7 @@
 
 /*** DEFINES ***/
 #define MIM_VERSION "0.0.1"
+#define MIM_TAB_SIZE 4
 
 // Emulate CTRL + inputs (sets first three bits to 0 to emulate ASCII behaviour)
 #define CTRL_KEY(k) ((k) & 0x1f)
@@ -41,14 +42,22 @@ struct termios original_termios;
 
 typedef struct erow
 {
+    // Size of actual characters
     int size;
+    // Actual data
     char *chars;
+    // Size of render string
+    int rsize;
+    // Data to render (formatted)
+    char *render;
 } erow;
 
 struct editor_config
 {
     // Cursor positions
     int cx, cy;
+    // Cursor position on render
+    int rx;
     // Row offset
     int rowoff;
     // Column offset
@@ -286,6 +295,64 @@ int get_window_size(int *rows, int *cols)
 /*** ROW OPERATIONS ***/
 
 /**
+ * Convert cursor x position to render x position
+ *
+ * Translates the cursor position (cx) to the render position (rx)
+ * accounting for tab characters which take up multiple spaces.
+ */
+int editor_row_cx_to_rx(erow *row, int cx)
+{
+    int rx = 0;
+    int j;
+    for (j = 0; j < cx; j++)
+    {
+        if (row->chars[j] == '\t')
+            rx += (MIM_TAB_SIZE - 1) - (rx % MIM_TAB_SIZE);
+        rx++;
+    }
+    return rx;
+}
+
+/**
+ * Update the render version of a row
+ *
+ * Processes the raw text in a row to create a render-ready version
+ * that handles special characters.
+ */
+void editor_update_row(erow *row)
+{
+    int tabs = 0;
+    int j;
+    for (j = 0; j < row->size; j++)
+    {
+        if (row->chars[j] == '\t')
+            tabs++;
+    }
+
+    free(row->render);
+    // Tabs need max TAB_SIZE bytes, 1 is already in size so we add the rest
+    row->render = malloc(row->size + tabs * (MIM_TAB_SIZE - 1) + 1);
+
+    int idx = 0;
+    for (j = 0; j < row->size; j++)
+    {
+        if (row->chars[j] == '\t')
+        {
+            row->render[idx++] = ' ';
+            // Append spaces until tabsize is hit
+            while (idx % MIM_TAB_SIZE != 0)
+                row->render[idx++] = ' ';
+        }
+        else
+        {
+            row->render[idx++] = row->chars[j];
+        }
+    }
+    row->render[idx] = '\0';
+    row->rsize = idx;
+}
+
+/**
  * Add a new row of text to the editor buffer
  *
  * Allocate memory for a new row and copy the provided string.
@@ -298,6 +365,10 @@ void editor_append_row(char *s, size_t len)
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
     E.row[at].chars[len] = '\0';
+
+    E.row[at].rsize = 0;
+    E.row[at].render = NULL;
+    editor_update_row(&E.row[at]);
     E.numrows++;
 }
 
@@ -377,6 +448,11 @@ void ab_free(struct abuf *ab)
  */
 void editor_scroll()
 {
+    E.rx = E.cx;
+    if (E.cy < E.numrows)
+    {
+        E.rx = editor_row_cx_to_rx(&E.row[E.cy], E.cx);
+    }
     // Cursor is above visible window, scroll up
     if (E.cy < E.rowoff)
     {
@@ -389,15 +465,15 @@ void editor_scroll()
     }
 
     // Cursor is to the right of window, scroll right
-    if (E.cx < E.coloff)
+    if (E.rx < E.coloff)
     {
-        E.coloff = E.cx;
+        E.coloff = E.rx;
     }
 
     // Cursor is to the left of window, scroll left
-    if (E.cx >= E.coloff + E.screencols + 1)
+    if (E.rx >= E.coloff + E.screencols + 1)
     {
-        E.coloff = E.cx - E.screencols + 1;
+        E.coloff = E.rx - E.screencols + 2;
     }
 }
 
@@ -439,12 +515,12 @@ void editor_draw_rows(struct abuf *ab)
         }
         else
         {
-            int len = E.row[filerow].size - E.coloff;
+            int len = E.row[filerow].rsize - E.coloff;
             if (len < 0)
                 len = 0;
             if (len > E.screencols)
                 len = E.screencols;
-            ab_append(ab, &E.row[filerow].chars[E.coloff], len);
+            ab_append(ab, &E.row[filerow].render[E.coloff], len);
         }
         // Clean row as we write
         ab_append(ab, "\x1b[K", 3);
@@ -474,7 +550,7 @@ void editor_refresh_screen()
 
     char buf[32];
     // Draw the cursor at cy, cx
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.cx - E.coloff) + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1);
     ab_append(&ab, buf, strlen(buf));
 
     // Show cursor
@@ -502,7 +578,8 @@ void editor_move_cursor(int key)
     case ARROW_LEFT:
         if (E.cx != 0)
             E.cx--;
-        else if(E.cy > 0) {
+        else if (E.cy > 0)
+        {
             // Move up to previous line
             E.cy--;
             // At the end of line
@@ -518,9 +595,10 @@ void editor_move_cursor(int key)
             E.cy--;
         break;
     case ARROW_RIGHT:
-        if(row && E.cx < row->size)
+        if (row && E.cx < row->size)
             E.cx++;
-        else if (row && E.cx == row->size) {
+        else if (row && E.cx == row->size)
+        {
             // Move to line below
             E.cy++;
             // At the beginning of line
@@ -534,7 +612,8 @@ void editor_move_cursor(int key)
     // Reset init row and do the same for horizontal
     row = (E.cy < E.numrows) ? &E.row[E.cy] : NULL;
     int rowlen = row ? row->size : 0;
-    if (E.cx > rowlen) {
+    if (E.cx > rowlen)
+    {
         E.cx = rowlen;
     }
 }
@@ -558,12 +637,24 @@ void editor_process_keypress()
         E.cx = 0;
         break;
     case END_KEY:
-        E.cx = E.screencols - 1;
+        if (E.cy < E.numrows)
+            E.cx = E.row[E.cy].size;
         break;
 
     case PAGE_UP:
     case PAGE_DOWN:
     {
+        // Move cursor to top or bottom of screen
+        // and then emulate an entire screen worth of up/down input
+        if (c == PAGE_UP)
+        {
+            E.cy = E.rowoff;
+        }
+        else if (c == PAGE_DOWN)
+        {
+            E.cy = E.rowoff + E.screenrows - 1;
+        }
+
         int times = E.screenrows;
         while (times--)
             editor_move_cursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
@@ -589,6 +680,7 @@ void init_editor()
 {
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.rowoff = 0;
     E.numrows = 0;
     E.coloff = 0;
