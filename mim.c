@@ -13,7 +13,9 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <string.h>
+#include <stdarg.h>
 
 /*** DEFINES ***/
 #define MIM_VERSION "0.0.1"
@@ -69,6 +71,12 @@ struct editor_config
     int numrows;
     // Data in each row + size
     erow *row;
+    // Name of file opened in editor
+    char *filename;
+    // Status message below status bar
+    char statusmsg[80];
+    // Time when message was set
+    time_t statusmsg_time;
     struct termios original_termios;
 };
 
@@ -381,6 +389,9 @@ void editor_append_row(char *s, size_t len)
  */
 void editor_open(char *filename)
 {
+    free(E.filename);
+    // Duplicate string instead of taking the reference
+    E.filename = strdup(filename);
     FILE *fp = fopen(filename, "r");
     if (!fp)
         die("open");
@@ -524,12 +535,65 @@ void editor_draw_rows(struct abuf *ab)
         }
         // Clean row as we write
         ab_append(ab, "\x1b[K", 3);
-        // If not last line, print newline
-        if (y < E.screenrows - 1)
-        {
-            ab_append(ab, "\r\n", 2);
-        }
+
+        // Append newline
+        ab_append(ab, "\r\n", 2);
     }
+}
+
+void editor_draw_status_bar(struct abuf *ab)
+{
+    // <Esc>[7m switches to invert color
+    // m - Select Graphic Rendition, 7 for invert
+    ab_append(ab, "\x1b[7m", 4);
+
+    char status[80], rstatus[80];
+
+    // Name of file and no. of lines
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No name]", E.numrows);
+
+    // From the right, current position
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+
+    // Trim if bigger than screen
+    if (len > E.screencols)
+        len = E.screencols;
+
+    ab_append(ab, status, len);
+    while (len < E.screencols)
+    {
+        // Go till we hit the space where the edge of screen is
+        // rlen characters long
+        if (E.screencols - len == rlen)
+        {
+            ab_append(ab, rstatus, rlen);
+            break;
+        }
+        else
+        {
+            ab_append(ab, " ", 1);
+        }
+        len++;
+    }
+    // Return to normal colors with <Esc>[m
+    ab_append(ab, "\x1b[m", 3);
+    ab_append(ab, "\r\n", 2);
+}
+
+void editor_draw_message_bar(struct abuf *ab)
+{
+    // Clear bar with K
+    ab_append(ab, "\x1b[K", 3);
+    
+    int msglen = strlen(E.statusmsg);
+
+    // Trim for screen size
+    if (msglen > E.screencols)
+        msglen = E.screencols;
+    
+    // There is a message and time hasn't expired
+    if (msglen && time(NULL) - E.statusmsg_time < 5)
+        ab_append(ab, E.statusmsg, msglen);
 }
 
 /**
@@ -547,6 +611,8 @@ void editor_refresh_screen()
     ab_append(&ab, "\x1b[H", 3);
 
     editor_draw_rows(&ab);
+    editor_draw_status_bar(&ab);
+    editor_draw_message_bar(&ab);
 
     char buf[32];
     // Draw the cursor at cy, cx
@@ -558,6 +624,27 @@ void editor_refresh_screen()
 
     write(STDOUT_FILENO, ab.b, ab.len);
     ab_free(&ab);
+}
+
+/**
+ * Set status message
+ *
+ * Format the status string using vsnprintf
+ */
+void editor_set_status_message(const char *fmt, ...)
+{
+    va_list ap;
+    // Call va_start on a va_list object with fmt to get the address of next argument
+    va_start(ap, fmt);
+
+    // format the string according to fmt and stores it in E.statusmsg
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+
+    // clean up the va_list after we're done
+    va_end(ap);
+
+    // Pass null to time to get current time
+    E.statusmsg_time = time(NULL);
 }
 
 /*** INPUT  ***/
@@ -685,8 +772,13 @@ void init_editor()
     E.numrows = 0;
     E.coloff = 0;
     E.row = NULL;
+    E.filename = NULL;
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
     if (get_window_size(&E.screenrows, &E.screencols) == -1)
         die("get_window_size");
+    // Reserve two space for status bar
+    E.screenrows -= 2;
 }
 
 /**
@@ -700,6 +792,8 @@ int main(int argc, char *argv[])
     {
         editor_open(argv[1]);
     }
+
+    editor_set_status_message("HELP: CTRL+Q to quit");
 
     while (true)
     {
