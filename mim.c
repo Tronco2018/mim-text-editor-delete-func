@@ -19,7 +19,7 @@
 #include <fcntl.h>
 
 /*** DEFINES ***/
-#define MIM_VERSION "0.0.1"
+#define MIM_VERSION "1.0.0"
 #define MIM_TAB_SIZE 4
 #define MIM_QUIT_TIMES 1
 
@@ -560,7 +560,13 @@ void editor_open(char *filename)
     E.filename = strdup(filename);
     FILE *fp = fopen(filename, "r");
     if (!fp)
-        die("open");
+    {
+        // File doesn't exist, just set the filename without creating the file
+        // The file will be created when the user saves
+        // This message is actually overwritten by the help message
+        editor_set_status_message("New file: %s", filename);
+        return;
+    }
 
     char *line = NULL;
     // Hold size of allocated buff
@@ -602,6 +608,9 @@ void editor_save()
     // buf has a pointer to the converted memory that we free later
     char *buf = editor_rows_to_string(&len);
 
+    // Check if file already exists to differentiate messages
+    int file_exists = access(E.filename, F_OK) == 0;
+
     // O_READWRITE
     // O_CREATE file if doesn't exist
     // 0644 file perms if file is to be created
@@ -610,12 +619,20 @@ void editor_save()
     {
         if (ftruncate64(fd, len) != -1)
         {
-            if (write(fd, buf, len) != 1)
+            if (write(fd, buf, len) == len)
             {
                 close(fd);
                 free(buf);
                 E.dirty = 0;
-                editor_set_status_message("%d bytes written to disk", len);
+
+                if (!file_exists)
+                {
+                    editor_set_status_message("New file created: %s. %d bytes written to disk", E.filename, len);
+                }
+                else
+                {
+                    editor_set_status_message("%d bytes written to disk", len);
+                }
                 return;
             }
         }
@@ -978,6 +995,13 @@ void editor_process_keypress()
 {
     static int quit_times = MIM_QUIT_TIMES;
     int c = editor_read_key();
+
+    // Reset quit_times to MIM_QUIT_TIMES if the key pressed is not CTRL-Q
+    if (c != CTRL_KEY('q'))
+    {
+        quit_times = MIM_QUIT_TIMES;
+    }
+
     switch (c)
     {
     // Enter key
