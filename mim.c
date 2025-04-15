@@ -393,6 +393,17 @@ void editor_row_insert_char(erow *row, int at, int c)
     E.dirty = 1;
 }
 
+void editor_row_del_char(erow *row, int at)
+{
+    if (at < 0 || at >= row->size)
+        return;
+    // Shift from [at+1] to [at]
+    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+    row->size--;
+    editor_update_row(row);
+    E.dirty++;
+}
+
 /*** EDITOR OPERATIONS ***/
 
 /**
@@ -409,6 +420,20 @@ void editor_insert_char(int c)
     E.cx++;
 }
 
+void editor_del_char()
+{
+    // Cursor past file, return
+    if (E.cy == E.numrows)
+        return;
+
+    erow *row = &E.row[E.cy];
+    // Character to the left, then delete
+    if (E.cx > 0)
+    {
+        editor_row_del_char(row, E.cx - 1);
+        E.cx--;
+    }
+}
 /*** FILE IO ***/
 
 char *editor_rows_to_string(int *buflen)
@@ -810,7 +835,8 @@ void editor_process_keypress()
 
     case CTRL_KEY('q'):
         // Clear screen
-        if (E.dirty && quit_times > 0) {
+        if (E.dirty && quit_times > 0)
+        {
             editor_set_status_message("WARNING: File has unsaved changes. Press CTRL-Q again to quit.");
             quit_times--;
             return;
@@ -835,7 +861,10 @@ void editor_process_keypress()
     case BACKSPACE:
     case CTRL_KEY('h'):
     case DEL_KEY:
-        // TODO
+        // For del key, also move it to right
+        if (c == DEL_KEY)
+            editor_move_cursor(ARROW_RIGHT);
+        editor_del_char();
         break;
 
     case PAGE_UP:
