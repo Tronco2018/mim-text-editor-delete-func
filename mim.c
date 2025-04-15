@@ -296,7 +296,7 @@ int get_window_size(int *rows, int *cols)
     }
     else
     {
-        // Update parmas
+        // Update params
         *cols = ws.ws_col;
         *rows = ws.ws_row;
         return 0;
@@ -381,12 +381,18 @@ void editor_insert_row(int at, char *s, size_t len)
     E.dirty++;
 }
 
+/**
+ * Free memory allocated for a row
+ */
 void editor_free_row(erow *row)
 {
     free(row->chars);
     free(row->render);
 }
 
+/**
+ * Delete a row at specified position
+ */
 void editor_del_row(int at)
 {
     // Validate row index
@@ -418,6 +424,9 @@ void editor_row_insert_char(erow *row, int at, int c)
     E.dirty++;
 }
 
+/**
+ * Append a string to end of specified row
+ */
 void editor_row_append_string(erow *row, char *s, size_t len)
 {
     row->chars = realloc(row->chars, row->size + len + 1);
@@ -429,6 +438,9 @@ void editor_row_append_string(erow *row, char *s, size_t len)
     E.dirty++;
 }
 
+/**
+ * Delete character at specified position in row
+ */
 void editor_row_del_char(erow *row, int at)
 {
     if (at < 0 || at >= row->size)
@@ -456,6 +468,9 @@ void editor_insert_char(int c)
     E.cx++;
 }
 
+/**
+ * Insert a newline at current cursor position
+ */
 void editor_insert_newline()
 {
     if (E.cx == 0)
@@ -477,6 +492,9 @@ void editor_insert_newline()
     E.cx = 0;
 }
 
+/**
+ * Delete character at current cursor position
+ */
 void editor_del_char()
 {
     // Cursor past file, return
@@ -504,6 +522,9 @@ void editor_del_char()
 }
 /*** FILE IO ***/
 
+/**
+ * Convert editor rows to a single string
+ */
 char *editor_rows_to_string(int *buflen)
 {
     // Total length of text
@@ -561,6 +582,9 @@ void editor_open(char *filename)
     E.dirty = 0;
 }
 
+/**
+ * Save current file to disk
+ */
 void editor_save()
 {
     if (E.filename == NULL)
@@ -839,6 +863,9 @@ void editor_set_status_message(const char *fmt, ...)
 
 /*** INPUT  ***/
 
+/**
+ * Prompt user for input and return entered text
+ */
 char *editor_prompt(char *prompt)
 {
     size_t bufsize = 128;
