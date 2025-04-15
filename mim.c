@@ -16,6 +16,7 @@
 #include <time.h>
 #include <string.h>
 #include <stdarg.h>
+#include <fcntl.h>
 
 /*** DEFINES ***/
 #define MIM_VERSION "0.0.1"
@@ -27,6 +28,7 @@
 // Key mappings
 enum editorKey
 {
+    BACKSPACE = 127,
     ARROW_LEFT = 1000,
     ARROW_RIGHT,
     ARROW_UP,
@@ -82,12 +84,14 @@ struct editor_config
 
 struct editor_config E;
 
+/*** PROTOTYPES ***/
+
+void editor_set_status_message(const char *fmt, ...);
+
 /*** TERMINAL ***/
 
 /**
- * Handle fatal errors.
- *
- * Print an error message provided by `perror()` and exit the program.
+ * Handle fatal errors and exit program
  */
 void die(const char *s)
 {
@@ -108,7 +112,7 @@ void disable_raw_mode()
 }
 
 /**
- * Enter raw terminal mode
+ * Enter raw terminal mode for better keyboard input handling
  */
 void enable_raw_mode()
 {
@@ -145,7 +149,7 @@ void enable_raw_mode()
 }
 
 /**
- * Read a single key from standard input
+ * Read a single key from keyboard input
  */
 int editor_read_key()
 {
@@ -242,10 +246,7 @@ int editor_read_key()
 }
 
 /**
- * Get current cursor position
- *
- * Request cursor position from terminal and parse the response
- * to determine current row and column.
+ * Get current cursor position from terminal
  */
 int get_cursor_position(int *rows, int *cols)
 {
@@ -273,10 +274,7 @@ int get_cursor_position(int *rows, int *cols)
 }
 
 /**
- * Determine terminal window dimensions
- *
- * Try to get window size using ioctl, or fallback to positioning
- * cursor at bottom right and reading the position.
+ * Get terminal window dimensions
  */
 int get_window_size(int *rows, int *cols)
 {
@@ -303,10 +301,7 @@ int get_window_size(int *rows, int *cols)
 /*** ROW OPERATIONS ***/
 
 /**
- * Convert cursor x position to render x position
- *
- * Translates the cursor position (cx) to the render position (rx)
- * accounting for tab characters which take up multiple spaces.
+ * Convert cursor x position to render x position accounting for tabs
  */
 int editor_row_cx_to_rx(erow *row, int cx)
 {
@@ -322,10 +317,7 @@ int editor_row_cx_to_rx(erow *row, int cx)
 }
 
 /**
- * Update the render version of a row
- *
- * Processes the raw text in a row to create a render-ready version
- * that handles special characters.
+ * Update the render version of a row with proper tab handling
  */
 void editor_update_row(erow *row)
 {
@@ -361,9 +353,7 @@ void editor_update_row(erow *row)
 }
 
 /**
- * Add a new row of text to the editor buffer
- *
- * Allocate memory for a new row and copy the provided string.
+ * Add a new row to the editor buffer
  */
 void editor_append_row(char *s, size_t len)
 {
@@ -380,12 +370,69 @@ void editor_append_row(char *s, size_t len)
     E.numrows++;
 }
 
-/*** FILE IO ***/
+/**
+ * Insert a character into a row at specified position
+ */
+void editor_row_insert_char(erow *row, int at, int c)
+{
+    // Validate at index
+    if (at < 0 || at > row->size)
+        at = row->size;
+    // +1 for new char, +1 for '\0'
+    row->chars = realloc(row->chars, row->size + 2);
+    // Shift from [at] to [at+1]
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+    row->size++;
+    row->chars[at] = c;
+    // Rerender row
+    editor_update_row(row);
+}
+
+/*** EDITOR OPERATIONS ***/
 
 /**
+ * Insert a character at current cursor position
+ */
+void editor_insert_char(int c)
+{
+    if (E.cy == E.numrows)
+    {
+        // Append a new row
+        editor_append_row(" ", 0);
+    }
+    editor_row_insert_char(&E.row[E.cy], E.cx, c);
+    E.cx++;
+}
+
+/*** FILE IO ***/
+
+char *editor_rows_to_string(int *buflen)
+{
+    // Total length of text
+    int totlen = 0;
+    int j;
+    for (j = 0; j < E.numrows; j++)
+        totlen += E.row[j].size + 1; // +1 for \n
+
+    // Set buflen to totlen to tell the caller of its size
+    *buflen = totlen;
+
+    char *buf = malloc(totlen);
+    char *p = buf;
+    for (j = 0; j < E.numrows; j++)
+    {
+        // Loop thru, append each row to p + \n
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        // Point addition to move to last
+        p += E.row[j].size;
+        *p = '\n';
+        p++;
+    }
+
+    return buf;
+}
+/**
  * Open and read a file into the editor buffer
- *
- * Read file line by line and add each to the editor row buffer.
  */
 void editor_open(char *filename)
 {
@@ -415,6 +462,36 @@ void editor_open(char *filename)
     fclose(fp);
 }
 
+void editor_save()
+{
+    if (E.filename == NULL)
+        return;
+    // Length of file string
+    int len;
+    // buf has a pointer to the converted memory that we free later
+    char *buf = editor_rows_to_string(&len);
+
+    // O_READWRITE
+    // O_CREATE file if doesn't exist
+    // 0644 file perms if file is to be created
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    if (fd != -1)
+    {
+        if (ftruncate64(fd, len) != -1)
+        {
+            if (write(fd, buf, len) != 1)
+            {
+                close(fd);
+                free(buf);
+                editor_set_status_message("%d bytes written to disk", len);
+                return;
+            }
+        }
+        close(fd);
+    }
+    free(buf);
+    editor_set_status_message("Failed to save! I/O error: %s", strerror(errno));
+}
 // Define a single string buffer to update at once
 // Append buffer
 struct abuf
@@ -428,8 +505,6 @@ struct abuf
 
 /**
  * Append string to append buffer
- *
- * Reallocate memory as needed and append the string to the buffer.
  */
 void ab_append(struct abuf *ab, const char *s, int len)
 {
@@ -455,7 +530,7 @@ void ab_free(struct abuf *ab)
 /*** OUTPUT ***/
 
 /**
- * Update row offset based on cursor position
+ * Update row and column offsets based on cursor position
  */
 void editor_scroll()
 {
@@ -489,7 +564,7 @@ void editor_scroll()
 }
 
 /**
- * Handle drawing each row of buffer of text
+ * Draw each row of text in the editor
  */
 void editor_draw_rows(struct abuf *ab)
 {
@@ -541,6 +616,9 @@ void editor_draw_rows(struct abuf *ab)
     }
 }
 
+/**
+ * Draw the status bar at bottom of screen
+ */
 void editor_draw_status_bar(struct abuf *ab)
 {
     // <Esc>[7m switches to invert color
@@ -580,24 +658,27 @@ void editor_draw_status_bar(struct abuf *ab)
     ab_append(ab, "\r\n", 2);
 }
 
+/**
+ * Draw the message bar below status bar
+ */
 void editor_draw_message_bar(struct abuf *ab)
 {
     // Clear bar with K
     ab_append(ab, "\x1b[K", 3);
-    
+
     int msglen = strlen(E.statusmsg);
 
     // Trim for screen size
     if (msglen > E.screencols)
         msglen = E.screencols;
-    
+
     // There is a message and time hasn't expired
     if (msglen && time(NULL) - E.statusmsg_time < 5)
         ab_append(ab, E.statusmsg, msglen);
 }
 
 /**
- * Update the screen contents
+ * Refresh the entire screen contents
  */
 void editor_refresh_screen()
 {
@@ -627,9 +708,7 @@ void editor_refresh_screen()
 }
 
 /**
- * Set status message
- *
- * Format the status string using vsnprintf
+ * Set status message with optional formatting
  */
 void editor_set_status_message(const char *fmt, ...)
 {
@@ -650,7 +729,7 @@ void editor_set_status_message(const char *fmt, ...)
 /*** INPUT  ***/
 
 /**
- * Move the cursor using ARROW_{DIRECTION} keys
+ * Move cursor based on arrow key input
  */
 void editor_move_cursor(int key)
 {
@@ -706,18 +785,27 @@ void editor_move_cursor(int key)
 }
 
 /**
- * Wait for keypress from `editor_read_key` and handle special characters
+ * Process keyboard input and handle special keys
  */
 void editor_process_keypress()
 {
     int c = editor_read_key();
     switch (c)
     {
+    // Enter key
+    case '\r':
+        // TODO
+        break;
+
     case CTRL_KEY('q'):
         // Clear screen
         write(STDOUT_FILENO, "\x1b[2J", 4);
         write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
+        break;
+
+    case CTRL_KEY('s'):
+        editor_save();
         break;
 
     case HOME_KEY:
@@ -726,6 +814,12 @@ void editor_process_keypress()
     case END_KEY:
         if (E.cy < E.numrows)
             E.cx = E.row[E.cy].size;
+        break;
+
+    case BACKSPACE:
+    case CTRL_KEY('h'):
+    case DEL_KEY:
+        // TODO
         break;
 
     case PAGE_UP:
@@ -753,15 +847,22 @@ void editor_process_keypress()
     case ARROW_RIGHT:
         editor_move_cursor(c);
         break;
+
+    // Ignore
+    // CTRL-L used to be used for terminal refreshing
+    case CTRL_KEY('l'):
+    case '\x1b':
+        break;
+
     default:
+        // Insert every other keypress
+        editor_insert_char(c);
         break;
     }
 }
 
 /**
- * Initialize editor state
- *
- * Set default values for editor state and get terminal window size.
+ * Initialize editor state and terminal
  */
 void init_editor()
 {
@@ -782,7 +883,7 @@ void init_editor()
 }
 
 /**
- * Main function to initialize the program
+ * Main entry point for the editor
  */
 int main(int argc, char *argv[])
 {
@@ -793,7 +894,7 @@ int main(int argc, char *argv[])
         editor_open(argv[1]);
     }
 
-    editor_set_status_message("HELP: CTRL+Q to quit");
+    editor_set_status_message("HELP: CTRL+S to save | CTRL+Q to quit");
 
     while (true)
     {
