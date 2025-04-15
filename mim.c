@@ -90,6 +90,8 @@ struct editor_config E;
 /*** PROTOTYPES ***/
 
 void editor_set_status_message(const char *fmt, ...);
+void editor_refresh_screen();
+char *editor_prompt(char *prompt);
 
 /*** TERMINAL ***/
 
@@ -366,7 +368,7 @@ void editor_insert_row(int at, char *s, size_t len)
 
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
     memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
-    
+
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
@@ -562,7 +564,15 @@ void editor_open(char *filename)
 void editor_save()
 {
     if (E.filename == NULL)
-        return;
+    {
+        E.filename = editor_prompt("Save as: %s");
+        if (E.filename == NULL)
+        {
+            editor_set_status_message("Save aborted");
+            return;
+        }
+    }
+
     // Length of file string
     int len;
     // buf has a pointer to the converted memory that we free later
@@ -828,6 +838,55 @@ void editor_set_status_message(const char *fmt, ...)
 }
 
 /*** INPUT  ***/
+
+char *editor_prompt(char *prompt)
+{
+    size_t bufsize = 128;
+    char *buf = malloc(bufsize);
+
+    size_t buflen = 0;
+    buf[0] = '\0';
+
+    while (true)
+    {
+        editor_set_status_message(prompt, buf);
+        editor_refresh_screen();
+
+        int c = editor_read_key();
+        if (c == DEL_KEY || c == CTRL_KEY('h' || c == BACKSPACE))
+        {
+            if (buflen != 0)
+                buf[--buflen] = '\0';
+        }
+        else if (c == '\x1b')
+        {
+            editor_set_status_message("");
+            free(buf);
+            return NULL;
+        }
+        else if (c == '\r')
+        {
+            // buf is not empty
+            if (buflen != 0)
+            {
+                editor_set_status_message("");
+                return buf;
+            }
+        }
+        // If printable char, append to buff
+        else if (!iscntrl(c) && c < 128)
+        {
+            // If buffer is filled, realloc double mem
+            if (buflen == bufsize - 1)
+            {
+                bufsize *= 2;
+                buf = realloc(buf, bufsize);
+            }
+            buf[buflen++] = c;
+            buf[buflen] = '\0';
+        }
+    }
+}
 
 /**
  * Move cursor based on arrow key input
