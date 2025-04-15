@@ -371,7 +371,25 @@ void editor_append_row(char *s, size_t len)
     E.row[at].render = NULL;
     editor_update_row(&E.row[at]);
     E.numrows++;
-    E.dirty = 1;
+    E.dirty++;
+}
+
+void editor_free_row(erow *row)
+{
+    free(row->chars);
+    free(row->render);
+}
+
+void editor_del_row(int at)
+{
+    // Validate row index
+    if (at < 0 || at > E.numrows)
+        return;
+    editor_free_row(&E.row[at]);
+    // Shift rows [at+1] to [at]
+    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
+    E.numrows--;
+    E.dirty++;
 }
 
 /**
@@ -390,7 +408,18 @@ void editor_row_insert_char(erow *row, int at, int c)
     row->chars[at] = c;
     // Rerender row
     editor_update_row(row);
-    E.dirty = 1;
+    E.dirty++;
+}
+
+void editor_row_append_string(erow *row, char *s, size_t len)
+{
+    row->chars = realloc(row->chars, row->size + len + 1);
+    // Copy s at end of row
+    memcpy(&row->chars[row->size], s, len);
+    row->size += len;
+    row->chars[row->size] = '\0';
+    editor_update_row(row);
+    E.dirty++;
 }
 
 void editor_row_del_char(erow *row, int at)
@@ -425,6 +454,9 @@ void editor_del_char()
     // Cursor past file, return
     if (E.cy == E.numrows)
         return;
+    // Cursor top of file, return
+    if (E.cx == 0 && E.cy == 0)
+        return;
 
     erow *row = &E.row[E.cy];
     // Character to the left, then delete
@@ -432,6 +464,14 @@ void editor_del_char()
     {
         editor_row_del_char(row, E.cx - 1);
         E.cx--;
+    }
+    // If deleteing from first position, merge rows
+    else
+    {
+        E.cx = E.row[E.cy - 1].size;
+        editor_row_append_string(&E.row[E.cy - 1], row->chars, row->size);
+        editor_del_row(E.cy);
+        E.cy--;
     }
 }
 /*** FILE IO ***/
