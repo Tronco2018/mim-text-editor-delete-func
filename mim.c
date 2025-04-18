@@ -1021,7 +1021,15 @@ void editor_process_keypress()
         write(STDOUT_FILENO, "\x1b[H", 3);
         exit(0);
         break;
-
+    case CTRL_KEY('d'):
+	if (E.cy < E.numrows) {
+		editor_del_row(E.cy);
+		if (E.cy >= E.numrows && E.numrows > 0){
+			E.cy = E.numrows -1;
+		}
+		E.cx = 0;
+	}
+	break;
     case CTRL_KEY('s'):
         editor_save();
         break;
